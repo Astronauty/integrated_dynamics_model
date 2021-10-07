@@ -1,6 +1,8 @@
 import math
 import numpy as np
 from scipy.optimize import fsolve
+import numdifftools as nd
+import types
 
 """
 Coordinate Systems:
@@ -12,30 +14,32 @@ Units:
 """
 class Tire:
     def __init__(self, pacejka_fit=None):
-        self.state = {}
-
         # Params
         # Pacejka Coefficients, specific to each tire
+        self.param = types.SimpleNamespace()
+        self.state = types.SimpleNamespace()
+
         self.param.pacejka_fit = pacejka_fit
         self.param.stiffness = 0
         self.param.steerable = None  # Is this a steerable tire, implement abstract class eventually
         self.param.position = np.array([None, None])  # Position of the center of the contact patch relative to vehicle frame
         self.param.radius_unloaded = None  # Unloaded tire radius
 
+        # States (keep in mind these aren't true state variables, includes some derived states)
+        self.state.steering_angle = 0
+        self.state.velocity = None  # Velocity vector of the tire relative to vehicle
+        self.state.camber = 0
+        self.state.slip_angle = 0
+        self.state.slip_ratio = 0
+        self.state.force = np.array([0, 0, 0]) # 3D force vector at the tire contact patch
+        self.state.moment = 0
 
-
-
-        # States (keep in mind these aren't true states, includes some derived)
-        self.state["velocity"] = None  # Velocity vector of the tire relative to vehicle
-        self.state["camber"] = 0
-        self.state["slip_angle"] = 0
-        self.state["slip_ratio"] = 0
-        self.state["force"] = np.array([0, 0, 0])
-        self.state["radius_effective"] = None  # Effective radius considering slip
-        self.state["angular_velocity"] = None
+        self.state.radius_effective = None  # Effective radius considering slip
+        self.state.angular_velocity = None
 
         # Vehicle inputs
         self.torque = None
+
 
     def get_radius_loaded(self):
         return self.radius_unloaded - self.state["force"][2]/self.stiffness
@@ -43,38 +47,24 @@ class Tire:
 
     # Determines the lateral force on the tire given the pacejka fit coefficients, slip angle, camber, and normal load
     # https://www.edy.es/dev/docs/pacejka-94-parameters-explained-a-comprehensive-guide/
-    def get_Fy(self, slip_angle, camber, Fz):
+    def get_Fy(self):
         [a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16,
-         a17] = self.pacejka_fit.Fy_coefficients
+         a17] = self.param.pacejka_fit.Fy_coefficients
+        Fz = self.state.force[2]
+
         C = a0
-        D = Fz * (a1 * Fz + a2) * (1 - a15 * camber ** 2)
-        BCD = a3 * math.sin(math.atan(Fz / a4) * 2) * (1 - a5 * abs(camber))
+        D = Fz * (a1 * Fz + a2) * (1 - a15 * self.state.camber ** 2)
+        BCD = a3 * math.sin(math.atan(Fz / a4) * 2) * (1 - a5 * abs(self.state.camber))
         B = BCD / (C * D)
-        H = a8 * Fz + a9 + a10 * camber
-        E = (a6 * Fz + a7) * (1 - (a16 * camber + a17) * math.copysign(1, slip_angle + H))
-        V = a11 * Fz + a12 + (a13 * Fz + a14) * camber * Fz
-        Bx1 = B * (slip_angle + H)
+        H = a8 * Fz + a9 + a10 * self.state.camber
+        E = (a6 * Fz + a7) * (1 - (a16 * self.state.camber + a17) * math.copysign(1, self.state.slip_angle + H))
+        V = a11 * Fz + a12 + (a13 * Fz + a14) * self.state.camber * Fz
+        Bx1 = B * (self.state.slip_angle + H)
 
         Fy = D * math.sin(C * math.atan(Bx1 - E * (Bx1 - math.atan(Bx1)))) + V
 
-        return D * math.sin(C * math.atan(Bx1 - E * (Bx1 - math.atan(Bx1)))) + V
-
-    def get_Fy_Optimize(self, slip_angle, *args):
-        camber, Fz, Fy_des = args
-        [a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16,
-         a17] = self.pacejka_fit.Fy_coefficients
-        C = a0
-        D = Fz * (a1 * Fz + a2) * (1 - a15 * camber ** 2)
-        BCD = a3 * math.sin(math.atan(Fz / a4) * 2) * (1 - a5 * abs(camber))
-        B = BCD / (C * D)
-        H = a8 * Fz + a9 + a10 * camber
-        E = (a6 * Fz + a7) * (1 - (a16 * camber + a17) * math.copysign(1, slip_angle + H))
-        V = a11 * Fz + a12 + (a13 * Fz + a14) * camber * Fz
-        Bx1 = B * (slip_angle + H)
-
-        Fy = D * math.sin(C * math.atan(Bx1 - E * (Bx1 - math.atan(Bx1)))) + V - Fy_des
-
         return Fy
+
 
     def get_Fx(self, slip_angle, camber, Fz):
         # [b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15, b16, b17] = self.pacejka_fit.Fx_coefficients
@@ -94,17 +84,16 @@ class Tire:
         return 0
 
     # Returns the slip angle needed to produce an Fy input
-    def get_SlipAngle(self, Fy):
+    def get_slip_angle(self, Fy):
         data = (0, 800, Fy)  # Camber and Fz
         return fsolve(self.get_Fy_Optimize, 10, args=data)
 
-    def hasTraction(self):
-        # Model the friction ellipse as an ellipsoid
-        a = 1
-        b = 1
-        c = 1
-        return 0
 
+    def get_cornering_stiffness(self): # Cornering stiffness is Fy/slip_angle
+        return
+
+    def get_possible_bodyslip_and_steering(self):
+        return 0
 
 # Stores predetermined pacejka fits for several tires
 class PacejkaFit:
