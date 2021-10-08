@@ -92,9 +92,6 @@ class Tire:
     def get_cornering_stiffness(self): # Cornering stiffness is Fy/slip_angle
         return
 
-    def get_possible_bodyslip_and_steering(self):
-        return 0
-
 # Stores predetermined pacejka fits for several tires
 class PacejkaFit:
     def __init__(self, Fx_coefficients=None,

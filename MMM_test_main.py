@@ -23,36 +23,67 @@ from suspension_new import Suspension
 """
 
 suspension = Suspension()
-suspension.front_wheelrate_stiffness = (.574**2) * 400 / (.0254 * .224)
-suspension.rear_wheelrate_stiffness = (.747**2) * 450 / (.0254 * .224)
-suspension.front_roll_stiffness = 200 # N*m/rad
-suspension.rear_roll_stiffness = 400 # N*m/rad
 
-bodyslip_sweep = np.linspace(-30*math.pi/180, 30*math.pi/180, 20)
-steer_angle_sweep = np.linspace(-10*math.pi/180, 10*math.pi/180, 20)
-bodyslip_v, steer_angle_v = np.meshgrid(bodyslip_sweep, steer_angle_sweep)
 
-print(bodyslip_v)
+# suspension.state.accel = np.array([0,10,0])
+# suspension.state.bodyslip = -0*math.pi/180
+# suspension.state.steer_angle = -2*math.pi/180
+# suspension.update_tires()
 
-cols = bodyslip_sweep.size
-rows = steer_angle_sweep.size
+###
 
-print(rows,cols)
+# suspension.state.accel = np.array([0,10,0])
 
-force_v = np.zeros((rows-1, cols-1))
+suspension.state.accel = np.array([0, 10, 0])
+bodyslip_sweep = np.linspace(-30*math.pi/180, 30*math.pi/180, 100)
+steer_angle_sweep = np.linspace(-45*math.pi/180, 10*math.pi/180, 100)
+arr = suspension.find_body_slip_and_steer(bodyslip_sweep, steer_angle_sweep)
 
-for i in range(rows - 1):
-    for j in range(cols - 1):
-        print(i,j)
-        suspension.state.bodyslip = bodyslip_v[i, j]
-        suspension.state.steer_angle = steer_angle_v[i, j]
-        suspension.update_tires()
+print(arr.shape)
+fig = plt.figure()
+ax = fig.add_subplot(projection='3d')
+ax.scatter3D(arr[:,0]*180/math.pi, arr[:,1]*180/math.pi, arr[:,2])
+ax.set_xlabel('bodyslip (deg)')
+ax.set_ylabel('steer angle (deg)')
+ax.set_zlabel('lat force (N)')
 
-        force_v[i, j] = suspension.get_total_Fy()
-        print(suspension.get_total_Fy())
-
-plt.pcolor(bodyslip_v, steer_angle_v, force_v)
-plt.colorbar()
-plt.xlabel("Body Slip (rad)")
-plt.ylabel("Steered Angle (rad)")
 plt.show()
+
+
+# bodyslip_sweep = np.linspace(-30*math.pi/180, 30*math.pi/180, 100)
+# steer_angle_sweep = np.linspace(-10*math.pi/180, 10*math.pi/180, 100)
+# bodyslip_v, steer_angle_v = np.meshgrid(bodyslip_sweep, steer_angle_sweep)
+#
+# print(bodyslip_v)
+#
+# cols = bodyslip_sweep.size
+# rows = steer_angle_sweep.size
+#
+# print(rows,cols)
+#
+# force_v = np.zeros((rows, cols))
+# suspension.state.accel = np.array([0,5,0])
+# for i in range(rows):
+#     for j in range(cols):
+#         print(i,j)
+#         suspension.state.bodyslip = bodyslip_v[i, j]
+#         suspension.state.steer_angle = steer_angle_v[i, j]
+#         suspension.update_tires()
+#
+#         force_v[i, j] = suspension.get_total_Fy()
+#         print(suspension.get_total_Fy())
+#
+# # plt.pcolor(bodyslip_v, steer_angle_v, force_v)
+# # plt.colorbar()
+# fig = plt.figure()
+# ax = plt.axes(projection='3d')
+# #ax.plot_wireframe(bodyslip_v, steer_angle_v, force_v, color='black')
+#
+# ax.plot_surface(bodyslip_v, steer_angle_v, force_v, rstride=1, cstride=1,
+#                 cmap='viridis', edgecolor='none')
+# ax.set_title('Lateral Force Surface');
+# ax.set_xlabel("Body Slip (rad)")
+# ax.set_ylabel("Steered Angle (rad)")
+# ax.set_zlabel("Lateral Force (N)")
+# ax.view_init(40, 35)
+# plt.show()

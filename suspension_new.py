@@ -24,28 +24,39 @@ class Suspension():
         # Environment variables (temporary for outside of lapsim functionality)
         self.env.g = 9.81
 
-
         # Params (eventually move over to parameters file)
-        self.param.front_roll_stiffness = 0
-        self.param.rear_roll_stiffness = 0
-        self.param.pitch_stiffness = 0
-
-        self.param.front_wheelrate_stiffness = 0
-        self.param.rear_wheelrate_stiffness = 0
-
-        self.param.front_toe = 0
-        self.param.rear_toe = 0
-
-        self.param.front_static_camber = 0
-        self.param.rear_static_camber = 0
-
-        self.param.mass_total = 100  # kg
-        self.param.ride_height = 0.0762  # m
-
-        self.param.cg_bias = 0.6  # Position of the cg from front to rear, value from 0-1
         self.param.front_track = 1.27
         self.param.rear_track = 1.17
         self.param.wheelbase = 1.55
+
+        self.param.front_roll_stiffness = 385 * math.pi/180  # N*m/rad
+        self.param.rear_roll_stiffness = 385 * math.pi/180 # N*m/rad
+        self.param.pitch_stiffness = 0
+        self.param.front_wheelrate_stiffness = (.574**2) * 400 / (.0254 * .224)
+        self.param.rear_wheelrate_stiffness = (.747**2) * 450 / (.0254 * .224)
+
+        self.param.front_toe = 1
+        self.param.rear_toe = 0
+        self.param.front_static_camber = 0
+        self.param.rear_static_camber = 0
+
+        self.param.mass_unsprung_front = 13.5
+        self.param.unsprung_front_height = 0.0254 * 8
+        self.param.mass_unsprung_rear = 13.2
+        self.param.unsprung_rear_height = 0.0254 * 8
+
+        self.param.mass_sprung = 245.46
+        self.param.cg_sprung_position = np.array([1.525 * 0.60, 0, 0.0254 * 10])
+
+        self.param.mass_total = self.param.mass_sprung + self.param.mass_unsprung_front + self.param.mass_unsprung_rear
+        self.param.cg_total_bias = 0.6  # Position of the cg from front to rear, value from 0-1
+        self.param.cg_total_position = np.array([self.param.cg_total_bias * self.param.wheelbase, 0, 0.0254 * 10])
+
+        self.param.front_roll_center_height = -.75 * .0254
+        self.param.rear_roll_center_height = -.5 * .0254
+        self.param.pitch_center_x = -2.5 * 0.0254
+
+        self.param.ride_height = 0.0762  # m
 
         front_coeff_Fx = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
         front_coeff_Fy = [0.01131, -0.0314, 282.1, -650, -1490, 0.03926, -0.0003027, 0.9385, 5.777 * 10 ** -5, -0.06358,
@@ -66,6 +77,8 @@ class Suspension():
 
         self.state.position = np.array([0, 0])  # Planar position in the global frame, maybe should be RacecarState
         self.state.velocity = np.array([0, 0])
+
+        self.state.accel = np.array([0, 0, 0])
 
     # def steady_state_load_transfer(self, Ax, Ay, Az):
     #     longitudinal_reaction_moment = Ax * self.mass_total
@@ -92,7 +105,8 @@ class Suspension():
     def get_total_Fy(self):
         total_Fy = 0
         for tire in self.state.tires.values():
-            total_Fy += tire.get_Fy()
+            total_Fy += tire.get_Fy()*math.cos(tire.state.slip_angle)
+
         return total_Fy
 
     def update_tires(self):
@@ -105,178 +119,108 @@ class Suspension():
         self.state.tires["front_right"].state.slip_angle += (self.param.front_toe + self.state.steer_angle)
         self.state.tires["rear_left"].state.slip_angle += (-self.param.rear_toe)
         self.state.tires["rear_right"].state.slip_angle += self.param.rear_toe
-        
+
         # Update camber
         # TODO: add camber gain
-        self.state.tires["front_left"].camber = self.param.front_static_camber
-        self.state.tires["front_right"].camber = self.param.front_static_camber
-        self.state.tires["rear_right"].camber = self.param.rear_static_camber
-        self.state.tires["rear_right"].camber = self.param.rear_static_camber
+        self.state.tires["front_left"].state.camber = self.param.front_static_camber
+        self.state.tires["front_right"].state.camber = self.param.front_static_camber
+        self.state.tires["rear_right"].state.camber = self.param.rear_static_camber
+        self.state.tires["rear_right"].state.camber = self.param.rear_static_camber
 
-        # Update normal force
-        # TODO: apply proper static weight transfer
+        # Update normal forces
         static_tire_weights = self.get_static_weight_tire_forces()
-        self.state.tires["front_left"].state.force[2] = static_tire_weights[0]
-        self.state.tires["front_right"].state.force[2] = static_tire_weights[1]
-        self.state.tires["rear_left"].state.force[2] = static_tire_weights[2]
-        self.state.tires["rear_right"].state.force[2] = static_tire_weights[3]
+        [dW_lon, dW_lat_f, dW_lat_r] = self.get_static_weight_transfer()
+        self.state.tires["front_left"].state.force[2] = static_tire_weights[0] + dW_lat_f + dW_lon
+        self.state.tires["front_right"].state.force[2] = static_tire_weights[1] - dW_lat_f + dW_lon
+        self.state.tires["rear_left"].state.force[2] = static_tire_weights[2] + dW_lat_r - dW_lon
+        self.state.tires["rear_right"].state.force[2] = static_tire_weights[3] - dW_lat_r - dW_lon
+
+        # Update lateral forces
+        for tire in self.state.tires.values():
+            tire.state.force[1] = tire.get_Fy()
 
     def get_static_weight_tire_forces(self):
-        weight_front_static = -self.env.g * self.param.mass_total * (1-self.param.cg_bias)
-        weight_rear_static = -self.env.g * self.param.mass_total * self.param.cg_bias
+        weight_front_static = -self.env.g * self.param.mass_total * (1 - self.param.cg_total_bias)
+        weight_rear_static = -self.env.g * self.param.mass_total * self.param.cg_total_bias
 
         # Returning forces on tires in N
         return [weight_front_static / 2, weight_front_static / 2, weight_rear_static / 2, weight_rear_static / 2]
 
-    def dynamicWeightTransfer(self, state):
+    def get_static_weight_transfer(self):
         # dW_lats are always 0 unless there is a nonzero lateral acceleration
         # dW_long is positive when accelerating
-        a_lon = state.a_long / self.env.g  # converts to g's
-        a_lat = state.a_lat / self.env.g
 
-        self.log('a_long_g', a_lon)
-        self.log('a_lat_g', a_lat)
+        a_lon = self.state.accel[0] / self.env.g
+        a_lat = self.state.accel[1] / self.env.g
 
-        rollAxis = self.ic_geometry()
+        ic_geometry = self.ic_geometry()
 
-        # Note: pitch center terms just cancel out. Add moment of inertia term to sprung weight equation?
-        dW_spr_x = a_lon * self.WS * \
-                   (self.params.car.CG_sZ - rollAxis[3]) / self.params.car.WB
-        dW_geo_x = a_lon * self.WS * (rollAxis[3] / self.params.car.WB)
+        # Longitudinal load transfer
+        dW_lon = 0.5 * a_lon * self.param.mass_total * self.env.g * self.param.cg_total_position[2] / self.param.wheelbase
 
-        # pitch calculation
-        if state.a_long > 0:
-            p_direction = 0
-            '''
-            dW_uns_fx = 0
-            dW_uns_rx = a_lon * (self.WUS_r / 2) * \
-                (self.params.car.CG_urZ / self.params.car.WB)
-            dW_lon = dW_spr_x + dW_geo_x + dW_uns_rx
-            '''
-
-        else:
-            p_direction = 1
-            '''
-            dW_uns_rx = 0
-            dW_uns_fx = a_lon * (self.WUS_f / 2) * \
-                (self.params.car.CG_ufZ / self.params.car.WB)
-            dW_lon = dW_spr_x + dW_geo_x + dW_uns_fx
-            '''
-
-        dW_uns_x = a_lon * (self.WUS_f * self.params.car.CG_urZ + self.WUS_r * self.params.car.CG_ufZ)
-        dW_lon = dW_spr_x + dW_geo_x + dW_uns_x
-        pitch = self.params.springs.p_GR[p_direction] * a_lon
-
-        '''
-        # yaw estimate, likely the best that can be done with linear point-mass model
-        if abs(state.a_lat) < 0.000001 or state.v == 0:
-            yaw = 0
-        else:
-            yaw = math.atan(self.params.car.WB / (2 * state.v **
-                                                  2 / state.a_lat)) * 180 / math.pi
-        '''
-
-        # Body Slip (Yaw?) Equation from Millikan
-
-        CS_f = 0  # Replace with front cornering stiffness
-        CS_r = 0  # Replace with rear cornering stiffness
-        Y_beta = CS_f + CS_r
-        if state.v > 0:
-            Y_r = (self.params.car.CG_sX * CS_f - (self.params.car.WB - self.params.car.CG_sX) * CS_r) / state.v
-        else:
-            Y_r = 0
-        Y_delta = -CS_f
-        N_beta = self.params.car.CG_sX * CS_f - (self.params.car.WB - self.params.car.CG_sX) * CS_r
-        N_r = (self.params.car.CG_sX ** 2 * CS_f - (self.params.car.WB - self.params.car.CG_sX) ** 2 * CS_r)
-        N_delta = -self.params.car.CG_sX * CS_f
-        Q = N_beta * Y_r - N_beta * self.car_mass * state.v - Y_beta * N_r
-
-        # yaw = (Y_delta * N_r - N_delta * (Y_r - self.car_mass * state.v)) * state.steer_angle / Q
-
-        yaw = 0
+        # pitch = self.params.springs.p_GR[p_direction] * a_lon
 
         # Roll calculation - from M&M 18.4 (pg 682), requires roll stiffnesses to be in terms of radians for small angle
         # to hold
-        K_roll = self.WS * rollAxis[2] / ((180 / math.pi) * (self.K_R_f + self.K_R_r) - (
-                self.WS * rollAxis[2]))
-        roll = a_lat * K_roll * 180 / math.pi
+        weight_sprung = self.param.mass_sprung * self.env.g
 
-        K_R_f_prime = self.K_R_f * (180 / math.pi) - (self.params.car.WB - self.params.car.CG_sX) * self.WS * rollAxis[
-            2] \
-                      / self.params.car.WB
-        dw_spr_f = (a_lat * self.WS / self.params.car.TK_f) * \
-                   (K_roll * K_R_f_prime / self.WS)
-        dw_geo_f = (a_lat * self.WS / self.params.car.TK_f) * \
-                   ((self.params.car.WB - self.params.car.CG_sX) / self.params.car.WB) * rollAxis[0]
-        dw_uns_f = a_lat * self.WUS_f * (self.params.car.CG_ufZ / self.params.car.TK_f)
+        K_roll = weight_sprung * ic_geometry[2] / ((self.param.front_roll_stiffness + self.param.rear_roll_stiffness)
+                                                   - (weight_sprung * ic_geometry[2]))  # rad/g
 
-        K_R_r_prime = self.K_R_r * (180 / math.pi) - self.params.car.CG_sX * self.WS * rollAxis[2] / self.params.car.WB
-        dw_spr_r = (a_lat * self.WS / self.params.car.TK_r) * \
-                   (K_roll * K_R_r_prime / self.WS)
-        dw_geo_r = (a_lat * self.WS / self.params.car.TK_r) * \
-                   self.params.car.CG_sX / self.params.car.WB * rollAxis[1]
-        dw_uns_r = a_lat * self.WUS_r * (self.params.car.CG_urZ / self.params.car.TK_r)
+        roll = a_lat * K_roll * 180 / math.pi  # Roll in deg
+
+        # Front roll load transfer
+        K_R_f_prime = self.param.front_roll_stiffness - (self.param.wheelbase - self.param.cg_sprung_position[0]) \
+                      * weight_sprung * ic_geometry[2] / self.param.wheelbase
+
+        dw_spr_f = (a_lat * weight_sprung / self.param.front_track) * (ic_geometry[2] * K_R_f_prime /
+                   (self.param.front_roll_stiffness + self.param.rear_roll_stiffness - weight_sprung * ic_geometry[2]))
+
+        dw_geo_f = (a_lat * weight_sprung / self.param.front_track) * \
+                   ((self.param.wheelbase - self.param.cg_sprung_position[0]) / self.param.wheelbase) * ic_geometry[0]
+
+        weight_unsprung_front = self.param.mass_unsprung_front * self.env.g
+        dw_uns_f = a_lat * weight_unsprung_front * (self.param.unsprung_front_height / self.param.front_track)
+
+        # Rear roll load transfer
+        K_R_r_prime = self.param.rear_roll_stiffness - self.param.cg_sprung_position[0] \
+                      * weight_sprung * ic_geometry[2] / self.param.wheelbase
+
+        dw_spr_r = (a_lat * weight_sprung / self.param.rear_track) * (ic_geometry[2] * K_R_r_prime /
+                   (self.param.front_roll_stiffness + self.param.rear_roll_stiffness - weight_sprung * ic_geometry[2]))
+
+        dw_geo_r = (a_lat * weight_sprung / self.param.rear_track) * \
+                   self.param.cg_sprung_position[0] / self.param.wheelbase * ic_geometry[1]
+
+        weight_unsprung_rear = self.param.mass_unsprung_rear * self.env.g
+        dw_uns_r = a_lat * weight_unsprung_rear * (self.param.unsprung_rear_height / self.param.rear_track)
 
         dW_lat_f = dw_spr_f + dw_geo_f + dw_uns_f
         dW_lat_r = dw_spr_r + dw_geo_r + dw_uns_r
 
-        self.log('roll', roll)
-        self.log('pitch', pitch)
-
-        self.log('dW_lon', dW_lon)
-        self.log('dW_lat_f', dW_lat_f)
-        self.log('dW_lat_r', dW_lat_r)
-
-        self.log('dW_spr_f', dw_spr_f)
-        self.log('dW_geo_f', dw_geo_f)
-        self.log('dW_uns_f', dw_uns_f)
-        self.log('dW_spr_r', dw_spr_r)
-        self.log('dW_geo_r', dw_geo_r)
-        self.log('dW_uns_r', dw_uns_r)
-
-        self.log('dW_spr_x', dW_spr_x)
-        self.log('dW_geo_x', dW_geo_x)
-        '''
-        self.log('dW_uns_rx', dW_uns_rx)
-        self.log('dW_uns_fx', dW_uns_fx)
-        '''
-        self.log('dW_uns_x', dW_uns_x)
-
-        return [dW_lon, dW_lat_f, dW_lat_r], [yaw, pitch, roll]
-
-    def tire_normals(self, dW_lon, dW_lat_f, dW_lat_r, downforce):
-
-        FIN = self.static_WD[0] - dW_lon / 2 - dW_lat_f + downforce[0]
-        FON = self.static_WD[1] - dW_lon / 2 + dW_lat_f + downforce[1]
-        RIN = self.static_WD[2] + dW_lon / 2 - dW_lat_r + downforce[2]
-        RON = self.static_WD[3] + dW_lon / 2 + dW_lat_r + downforce[3]
-
-        W_tot = FIN + FON + RIN + RON
-        self.log('weight', W_tot)
-
-        return [FIN, FON, RIN, RON]
+        return [dW_lon, dW_lat_f, dW_lat_r]
 
     def stiffness_arb(self):
-        if self.params.arb.enabled_f:
-            K_TB_f = self.params.arb.G_TB_f * math.pi / 32 * \
-                     (self.params.arb.TB_f_OD ** 4 -
-                      self.params.arb.TB_f_ID ** 4) / self.params.arb.TB_f_L
+        if self.param.arb.enabled_f:
+            K_TB_f = self.param.arb.G_TB_f * math.pi / 32 * \
+                     (self.param.arb.TB_f_OD ** 4 -
+                      self.param.arb.TB_f_ID ** 4) / self.param.arb.TB_f_L
 
-            self.K_ARB_f = K_TB_f * self.params.arb.IR_f ** 2 * (self.params.car.TK_f / self.params.arb.LA_f) ** 2 \
+            self.K_ARB_f = K_TB_f * self.param.arb.IR_f ** 2 * (self.param.car.TK_f / self.param.arb.LA_f) ** 2 \
                            * math.pi / 180  # Nm/deg
 
-        if self.params.arb.enabled_r:
-            K_TB_r = self.params.arb.G_TB_r * math.pi / 32 * \
-                     (self.params.arb.TB_r_OD ** 4 -
-                      self.params.arb.TB_r_ID ** 4) / self.params.arb.TB_r_L
+        if self.param.arb.enabled_r:
+            K_TB_r = self.param.arb.G_TB_r * math.pi / 32 * \
+                     (self.param.arb.TB_r_OD ** 4 -
+                      self.param.arb.TB_r_ID ** 4) / self.param.arb.TB_r_L
 
-            self.K_ARB_r = K_TB_r * self.params.arb.IR_r ** 2 * \
-                           (self.params.car.TK_r / self.params.arb.LA_r) ** 2 * math.pi / 180
+            self.K_ARB_r = K_TB_r * self.param.arb.IR_r ** 2 * \
+                           (self.param.car.TK_r / self.param.arb.LA_r) ** 2 * math.pi / 180
 
     def stiffness_suspension(self):
-        k_W_f = self.params.wheel.IR_f ** 2 * self.params.wheel.k_SP_f
-        k_RIDE_f = k_W_f * self.params.front_tire.k_T / \
-                   (k_W_f + self.params.front_tire.k_T)
+        k_W_f = self.param.wheel.IR_f ** 2 * self.param.wheel.k_SP_f
+        k_RIDE_f = k_W_f * self.param.front_tire.k_T / \
+                   (k_W_f + self.param.front_tire.k_T)
         self.K_S_f = k_RIDE_f * \
                      (self.params.car.TK_f / 2) ** 2 * 2 * math.pi / 180  # N.m/deg
 
@@ -286,9 +230,26 @@ class Suspension():
         self.K_S_r = k_RIDE_r * \
                      (self.params.car.TK_r / 2) ** 2 * 2 * math.pi / 180
 
-    def find_body_slip_and_steer(self):
-        self.state.front_left_tire.get_cornering_stiffness()
-        self.state.front_right_tire.get_cornering_stiffness()
-        self.state.rear_left_tire.get_cornering_stiffness()
-        self.state.rear_right_tire.get_cornering_stiffness()
-        return 0
+    def ic_geometry(self):
+        RA_theta = math.atan2((self.param.front_roll_center_height - self.param.rear_roll_center_height),
+                              self.param.wheelbase)
+        height_cg_to_roll_center = (self.param.cg_sprung_position[2] - self.param.front_roll_center_height) * math.cos(RA_theta) - \
+                                   self.param.cg_sprung_position[2] * self.param.wheelbase * math.sin(RA_theta)
+
+        return [self.param.front_roll_center_height, self.param.rear_roll_center_height, height_cg_to_roll_center,
+                self.param.pitch_center_x]
+
+    def find_body_slip_and_steer(self, bodyslip_sweep, steer_angle_sweep):
+        possible_pairs = np.zeros((1, 3))
+        for bodyslip in bodyslip_sweep:
+            for steer_angle in steer_angle_sweep:
+                self.state.bodyslip = bodyslip
+                self.state.steer_angle = steer_angle
+                self.update_tires()
+
+                if self.state.accel[1]*self.param.mass_total * 0.99 <= self.get_total_Fy() \
+                        <= self.state.accel[1] * self.param.mass_total * 1.01:
+                    possible_pairs = np.vstack([possible_pairs,[bodyslip, steer_angle, self.get_total_Fy()]])
+                    print(bodyslip, steer_angle)
+
+        return possible_pairs
