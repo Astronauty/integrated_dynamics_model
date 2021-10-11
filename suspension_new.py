@@ -35,7 +35,7 @@ class Suspension():
         self.param.front_wheelrate_stiffness = (.574**2) * 400 / (.0254 * .224)
         self.param.rear_wheelrate_stiffness = (.747**2) * 450 / (.0254 * .224)
 
-        self.param.front_toe = 1
+        self.param.front_toe = 4
         self.param.rear_toe = 0
         self.param.front_static_camber = 0
         self.param.rear_static_camber = 0
@@ -58,15 +58,21 @@ class Suspension():
 
         self.param.ride_height = 0.0762  # m
 
-        front_coeff_Fx = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-        front_coeff_Fy = [0.01131, -0.0314, 282.1, -650, -1490, 0.03926, -0.0003027, 0.9385, 5.777 * 10 ** -5, -0.06358,
+        rear_coeff_Fx = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+        rear_coeff_Fy = [0.01131, -0.0314, 282.1, -650, -1490, 0.03926, -0.0003027, 0.9385, 5.777 * 10 ** -5, -0.06358,
                           -0.1176, 0.02715, 4.998, 5.5557 * 10 ** -5, 0.05059, 0.005199, 0.001232, 0.004013]
-        front_coeff_Mz = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-        front_tire_pacejka = PacejkaFit(front_coeff_Fx, front_coeff_Fy, front_coeff_Mz)
+        rear_coeff_Mz = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
+        front_coeff_Fx = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+        front_coeff_Fy = [1.311, -0.0003557, -2.586, 550.1, 1403, 0.00956, 3.087e-07,0.0004554, 0.0003098, 0.1428,
+                         -0.1516, -0.1516, 0.304, 2.038e-05, 0.02862, 0.001671, -71.72, -281.9]
+        front_coeff_Mz = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    
+        front_tire_pacejka = PacejkaFit(front_coeff_Fx, front_coeff_Fy, front_coeff_Mz)
+        rear_tire_pacejka = PacejkaFit(rear_coeff_Fx, rear_coeff_Fy, rear_coeff_Mz)
         # States
         self.state.tires = {"front_left": Tire(front_tire_pacejka), "front_right": Tire(front_tire_pacejka)
-            , "rear_left": Tire(front_tire_pacejka), "rear_right": Tire(front_tire_pacejka)}
+            , "rear_left": Tire(rear_tire_pacejka), "rear_right": Tire(rear_tire_pacejka)}
 
         self.state.bodyslip = 0
         # self.state.yaw = 0
@@ -79,6 +85,8 @@ class Suspension():
         self.state.velocity = np.array([0, 0])
 
         self.state.accel = np.array([0, 0, 0])
+
+        self.update_tires()
 
     # def steady_state_load_transfer(self, Ax, Ay, Az):
     #     longitudinal_reaction_moment = Ax * self.mass_total
@@ -108,11 +116,15 @@ class Suspension():
             total_Fy += tire.get_Fy()*math.cos(tire.state.slip_angle)
 
         return total_Fy
-
+    def get_total_yaw_moment(self):
+        yaw_moment = 0
+        yaw_moment += (self.state.tires["front_left"].get_Fy())
+        return
     def update_tires(self):
         # Add the body slip to the slip angle on each tire
         for tire in self.state.tires.values():
-            tire.state.slip_angle += self.state.bodyslip
+            tire.state.slip_angle = self.state.bodyslip
+
 
         # Update toe, steering to each tire (following standard toe sign, steered angle direction same as body slip)
         self.state.tires["front_left"].state.slip_angle += (-self.param.front_toe + self.state.steer_angle)
@@ -124,7 +136,7 @@ class Suspension():
         # TODO: add camber gain
         self.state.tires["front_left"].state.camber = self.param.front_static_camber
         self.state.tires["front_right"].state.camber = self.param.front_static_camber
-        self.state.tires["rear_right"].state.camber = self.param.rear_static_camber
+        self.state.tires["rear_left"].state.camber = self.param.rear_static_camber
         self.state.tires["rear_right"].state.camber = self.param.rear_static_camber
 
         # Update normal forces
@@ -247,8 +259,8 @@ class Suspension():
                 self.state.steer_angle = steer_angle
                 self.update_tires()
 
-                if self.state.accel[1]*self.param.mass_total * 0.99 <= self.get_total_Fy() \
-                        <= self.state.accel[1] * self.param.mass_total * 1.01:
+                if self.state.accel[1]*self.param.mass_total * 0.95 <= self.get_total_Fy() \
+                        <= self.state.accel[1] * self.param.mass_total * 1.05:
                     possible_pairs = np.vstack([possible_pairs,[bodyslip, steer_angle, self.get_total_Fy()]])
                     print(bodyslip, steer_angle)
 
